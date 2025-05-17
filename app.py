@@ -10,22 +10,10 @@ import datetime
 # initialize variables from env
 load_dotenv()
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-GUILD_ID_STR = os.getenv('TEST_GUILD_ID')
 OPENWEATHERMAP_API_KEY = os.getenv('API_KEY')
 # Coordinates, default to Merced, California
 TEST_LAT = os.getenv('TEST_LATITUDE', "37.3022")
 TEST_LONG = os.getenv('TEST_LONGITUDE', "-120.4822")
-
-# Convert GUILD_ID to int after loading
-if GUILD_ID_STR:
-    try:
-        GUILD_ID = int(GUILD_ID_STR)
-    except ValueError:
-        print(f"CRITICAL ERROR: TEST_GUILD_ID '{GUILD_ID_STR}' is not a valid integer. Bot may not function correctly with guild-specific commands.")
-        GUILD_ID = None 
-else:
-    print("CRITICAL ERROR: TEST_GUILD_ID is not set in .env file.")
-    GUILD_ID = None 
 
 
 # API Base URLs from env
@@ -92,16 +80,6 @@ def get_aqi_category(aqi_index):
 async def on_ready():
     """Called when the bot is successfully connected and ready."""
     print(f'{bot.user.name} has connected to Discord!')
-    if GUILD_ID: # Check if GUILD_ID was successfully converted
-        guild = bot.get_guild(GUILD_ID) # Attempt to get the guild object
-        if guild:
-            print(f'Operating in guild: {guild.name} (ID: {GUILD_ID})')
-        else:
-            # This warning is important if guild-specific commands are not appearing
-            print(f"Could not find guild with ID: {GUILD_ID}. Ensure the bot is in this server and the ID is correct.")
-    else:
-        print("WARNING: GUILD_ID is not properly configured. Guild-specific commands may not sync.")
-
 
     # Check for OpenWeatherMap API Key (loaded from 'API_KEY' in .env)
     if OPENWEATHERMAP_API_KEY is None:
@@ -110,21 +88,25 @@ async def on_ready():
         key_preview = OPENWEATHERMAP_API_KEY[:5] + "..." + OPENWEATHERMAP_API_KEY[-5:] if len(OPENWEATHERMAP_API_KEY) > 10 else OPENWEATHERMAP_API_KEY
         print(f"OpenWeatherMap API Key (from 'API_KEY' in .env) loaded: {key_preview}. Successfully loaded for /aqi.")
 
-
-    if GUILD_ID:
-        try:
-            synced = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-            print(f"Synced {len(synced)} application (slash) command(s) to guild {GUILD_ID}.")
-        except Exception as e:
-            print(f"Error syncing application commands: {e}")
-    else:
-        print("Skipping command sync due to invalid GUILD_ID.")
+    # Sync global commands
+    try:
+        print("Attempting to sync global commands...")
+        # Passing no arguments to sync() syncs all global commands.
+        synced = await bot.tree.sync() 
+        if synced:
+            print(f"Synced {len(synced)} global application (slash) command(s):")
+            for cmd in synced:
+                print(f"  - {cmd.name}")
+        else:
+            print("No global commands were synced. This might happen if no commands are added to the tree or if there's an issue.")
+    except Exception as e:
+        print(f"Error syncing global application commands: {e}")
 
 
 # ====== COMMANDS ======
 
 # command for displaying what the aqi numbers mean
-@bot.tree.command(name="aqi_info", description="Displays the meaning of AQI numbers.", guild=discord.Object(id=GUILD_ID) if GUILD_ID else None)
+@bot.tree.command(name="aqi_info", description="Displays the meaning of AQI numbers.")
 async def aqi_info_slash(interaction: discord.Interaction):
     """
     Displays the meaning of AQI numbers in a Discord embed message.
@@ -149,7 +131,7 @@ async def aqi_info_slash(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # command for fetching air pollution forecast
-@bot.tree.command(name="aqi_f", description="Fetches air pollution forecast (OpenWeatherMap).", guild=discord.Object(id=GUILD_ID) if GUILD_ID else None)
+@bot.tree.command(name="aqi_f", description="Fetches air pollution forecast (OpenWeatherMap).")
 async def aqi_slash_forecase(interaction: discord.Interaction):
     """
     Fetches and displays air pollution forecast using OpenWeatherMap API
@@ -159,9 +141,6 @@ async def aqi_slash_forecase(interaction: discord.Interaction):
     # Precautions
     if not OPENWEATHERMAP_API_KEY:
         await interaction.response.send_message("Sorry, the API key for OpenWeatherMap air quality data is not configured. Please contact the bot administrator.", ephemeral=True)
-        return
-    if not GUILD_ID:
-        await interaction.response.send_message("Bot's guild ID is not configured correctly. Please contact an admin.", ephemeral=True)
         return
 
     # acknowledge user while loading
@@ -221,7 +200,7 @@ async def aqi_slash_forecase(interaction: discord.Interaction):
                 entry_local_datetime = datetime.datetime.fromtimestamp(dt_timestamp, tz=datetime.timezone.utc).astimezone()
                 if entry_local_datetime.date() == tomorrow_local_date:
                     selected_forecast_entry = entry
-                    print(f"DEBUG: Found forecast entry for tomorrow: {entry_local_datetime.strftime('%B %d, %Y %H:%M:%S')}")
+                    # print(f"DEBUG: Found forecast entry for tomorrow: {entry_local_datetime.strftime('%B %d, %Y %H:%M:%S')}")
                     break
 
         if not selected_forecast_entry:
@@ -305,7 +284,7 @@ async def aqi_slash_forecase(interaction: discord.Interaction):
         await interaction.edit_original_response(content=error_message)
 
 # command for fetching current air pollution
-@bot.tree.command(name="aqi_c", description="Fetches current air pollution (OpenWeatherMap).", guild=discord.Object(id=GUILD_ID) if GUILD_ID else None)
+@bot.tree.command(name="aqi_c", description="Fetches current air pollution (OpenWeatherMap).")
 async def aqi_slash_current(interaction: discord.Interaction):
     """
     Fetches and displays current air pollution using OpenWeatherMap API
@@ -315,9 +294,6 @@ async def aqi_slash_current(interaction: discord.Interaction):
     # Precautions
     if not OPENWEATHERMAP_API_KEY:
         await interaction.response.send_message("Sorry, the API key for OpenWeatherMap air quality data is not configured. Please contact the bot administrator.", ephemeral=True)
-        return
-    if not GUILD_ID:
-        await interaction.response.send_message("Bot's guild ID is not configured correctly. Please contact an admin.", ephemeral=True)
         return
 
     # acknowledge user while loading
@@ -451,8 +427,5 @@ if __name__ == "__main__":
     if TOKEN is None:
         print("CRITICAL ERROR: DISCORD_BOT_TOKEN is not set in the .env file. Bot cannot start.")
         exit()
-    if GUILD_ID is None: 
-        print("CRITICAL ERROR: TEST_GUILD_ID is not set correctly in .env or is invalid. Bot may not function as expected.")
-        bot.run(TOKEN)
     
     bot.run(TOKEN)
