@@ -54,14 +54,13 @@ class SettingsCog(commands.Cog):
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         else:
             error_message = f"An unexpected error occurred with setlocation: {error}"
-            print(error_message) # Log the full error to console
+            print(error_message) 
             # Check if response has already been sent or deferred
             if not interaction.response.is_done():
                 await interaction.response.send_message("An unexpected error occurred. Please try again later.", ephemeral=True)
             else:
                 await interaction.followup.send("An unexpected error occurred. Please try again later.", ephemeral=True)
 
-    
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SettingsCog(bot))

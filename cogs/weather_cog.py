@@ -269,8 +269,7 @@ class WeatherCog(commands.Cog):
         weather_params = {
             "lat": target_lat,
             "lon": target_lon,
-            "appid": self.bot.config.OPENWEATHERMAP_API_KEY,
-            "units": "metric" 
+            "appid": self.bot.config.OPENWEATHERMAP_API_KEY
         }
 
         weather_data = await utils.make_api_request(self.bot.config.CURRENT_WEATHER_API_URL, weather_params)
@@ -310,11 +309,26 @@ class WeatherCog(commands.Cog):
                 feels_like_celsius = feels_like_kelvin - 273.15
                 feels_like_fahrenheit = feels_like_celsius * 9/5 + 32
 
+            embed_color = discord.Color.blue()
+            # color based on weather condition
+            if isinstance(description, str):
+                weather_conditions = {
+                    "clear sky": discord.Color.from_rgb(135, 206, 235), # Sky blue
+                    "few clouds": discord.Color.from_rgb(173, 216, 230), # Light blue
+                    "scattered clouds": discord.Color.from_rgb(211, 211, 211), # Light gray
+                    "broken clouds": discord.Color.from_rgb(169, 169, 169), # Dark gray
+                    "shower rain": discord.Color.from_rgb(0, 191, 255), # Deep sky blue
+                    "rain": discord.Color.from_rgb(30, 144, 255), # Dodger blue
+                    "thunderstorm": discord.Color.from_rgb(255, 140, 0), # Dark orange
+                    "snow": discord.Color.from_rgb(240, 248, 255), # Alice blue
+                    "mist": discord.Color.from_rgb(192, 192, 192), # Silver
+                }
+                embed_color = weather_conditions.get(description.lower(), discord.Color.blue())
 
             embed = discord.Embed(
                 title=f"Current Weather for {effective_display}",
-                description=f"*{description}*",
-                color=discord.Color.blue()
+                description=f"*{description}*",            
+                color=embed_color
             )
             if icon_url:
                 embed.set_thumbnail(url=icon_url)
@@ -329,7 +343,6 @@ class WeatherCog(commands.Cog):
             embed.add_field(name="📊 Pressure", value=f"{pressure} hPa" if pressure != "N/A" else "N/A", inline=True)
             if visibility != "N/A":
                  embed.add_field(name="👁️ Visibility", value=f"{visibility/1000:.1f} km" if isinstance(visibility, (int,float)) else "N/A", inline=True)
-
 
             if "sunrise" in weather_data.get("sys", {}) and "sunset" in weather_data.get("sys", {}):
                 sunrise_ts = weather_data["sys"]["sunrise"]
@@ -349,6 +362,153 @@ class WeatherCog(commands.Cog):
                 error_message_content += f" API Message: {weather_data['message']}"
             else:
                 error_message_content += " Please check bot logs for more details or try again later."
+            await interaction.edit_original_response(content=error_message_content, embed=None)
+
+    @app_commands.command(name="weather_f", description="Fetches weather forecast (e.g., for tomorrow).")
+    async def weather_forecast_slash(self, interaction: discord.Interaction, city: str = None, state_code: str = None, country_code: str = None):
+        if not self.bot.config.OPENWEATHERMAP_API_KEY:
+            await interaction.response.send_message(
+                "Sorry, the API key for OpenWeatherMap weather data is not configured. Please contact the bot administrator.",
+                ephemeral=True
+            )
+            return
+
+        target_lat, target_lon, effective_display, full_location_desc_or_error = await self._get_effective_location(
+            interaction, city, state_code, country_code
+        )
+
+        if target_lat is None or target_lon is None:
+            await interaction.response.send_message(full_location_desc_or_error, ephemeral=True)
+            return
+
+        await interaction.response.send_message(f"Fetching weather forecast for **{full_location_desc_or_error}**...", ephemeral=False)
+
+        weather_params = {
+            "lat": target_lat,
+            "lon": target_lon,
+            "appid": self.bot.config.OPENWEATHERMAP_API_KEY
+        }
+
+        forecast_response = await utils.make_api_request(self.bot.config.WEATHER_FORECAST_API_URL, weather_params)
+
+        if forecast_response and "list" in forecast_response and forecast_response["list"]:
+            now_local = datetime.datetime.now().astimezone()
+            tomorrow_local_date = (now_local + datetime.timedelta(days=1)).date()
+            
+            selected_forecast_entry = None
+            
+            for entry in forecast_response["list"]:
+                dt_timestamp = entry.get("dt")
+                if dt_timestamp:
+                    entry_datetime_utc = datetime.datetime.fromtimestamp(dt_timestamp, tz=datetime.timezone.utc)
+                    entry_datetime_local = entry_datetime_utc.astimezone(now_local.tzinfo)
+
+                    if entry_datetime_local.date() == tomorrow_local_date:
+                        if selected_forecast_entry is None: 
+                            selected_forecast_entry = entry
+                        else:
+                            current_selected_dt_local = datetime.datetime.fromtimestamp(
+                                selected_forecast_entry.get("dt"), tz=datetime.timezone.utc
+                            ).astimezone(now_local.tzinfo)
+                            if abs(entry_datetime_local.hour - 12) < abs(current_selected_dt_local.hour - 12):
+                                selected_forecast_entry = entry
+            
+            if not selected_forecast_entry:
+                for entry in forecast_response["list"]:
+                    dt_timestamp = entry.get("dt")
+                    if dt_timestamp:
+                        entry_datetime_utc = datetime.datetime.fromtimestamp(dt_timestamp, tz=datetime.timezone.utc)
+                        entry_datetime_local = entry_datetime_utc.astimezone(now_local.tzinfo)
+                        if entry_datetime_local.date() == tomorrow_local_date:
+                            selected_forecast_entry = entry
+                            break 
+            
+            if not selected_forecast_entry:
+                now_ts_utc = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                future_entries = [e for e in forecast_response["list"] if e.get("dt", 0) > now_ts_utc]
+                if future_entries:
+                    selected_forecast_entry = future_entries[0]
+
+            if not selected_forecast_entry:
+                await interaction.edit_original_response(content=f"Could not find a suitable weather forecast entry for **{effective_display}** in the API response.")
+                return
+
+            main_data = selected_forecast_entry.get("main", {})
+            weather_list = selected_forecast_entry.get("weather", [])
+            weather_description_data = weather_list[0] if weather_list else {}
+            
+            wind_data = selected_forecast_entry.get("wind", {})
+            visibility_meters = selected_forecast_entry.get("visibility") 
+
+            description = weather_description_data.get("description", "N/A").capitalize()
+            icon_code = weather_description_data.get("icon")
+            icon_url = f"http://openweathermap.org/img/wn/{icon_code}@2x.png" if icon_code else None
+
+            temp_kelvin = main_data.get("temp")
+            feels_like_kelvin = main_data.get("feels_like")
+            humidity = main_data.get("humidity")
+            pressure = main_data.get("pressure")
+            wind_speed = wind_data.get("speed")
+
+            dt_timestamp = selected_forecast_entry.get("dt")
+            forecast_date_str = "N/A"
+            if dt_timestamp:
+                utc_datetime = datetime.datetime.fromtimestamp(dt_timestamp, tz=datetime.timezone.utc)
+                local_datetime_display = utc_datetime.astimezone(now_local.tzinfo)
+                forecast_date_str = local_datetime_display.strftime('%B %d, %Y at %I:%M %p %Z')
+            
+            temp_celsius, temp_fahrenheit = "N/A", "N/A"
+            if temp_kelvin is not None:
+                temp_celsius = temp_kelvin - 273.15
+                temp_fahrenheit = temp_celsius * 9/5 + 32
+            
+            feels_like_celsius, feels_like_fahrenheit = "N/A", "N/A"
+            if feels_like_kelvin is not None:
+                feels_like_celsius = feels_like_kelvin - 273.15
+                feels_like_fahrenheit = feels_like_celsius * 9/5 + 32
+
+            embed_color = discord.Color.blue()
+            if isinstance(description, str): 
+                weather_conditions = {
+                    "clear sky": discord.Color.from_rgb(135, 206, 235), "few clouds": discord.Color.from_rgb(173, 216, 230),
+                    "scattered clouds": discord.Color.from_rgb(211, 211, 211), "broken clouds": discord.Color.from_rgb(169, 169, 169),
+                    "shower rain": discord.Color.from_rgb(0, 191, 255), "rain": discord.Color.from_rgb(30, 144, 255),
+                    "thunderstorm": discord.Color.from_rgb(255, 140, 0), "snow": discord.Color.from_rgb(240, 248, 255),
+                    "mist": discord.Color.from_rgb(192, 192, 192),
+                }
+                embed_color = weather_conditions.get(description.lower(), discord.Color.blue())
+                    
+            embed = discord.Embed(
+                title=f"Weather Forecast for {effective_display}",
+                description=f"*{description}*",            
+                color=embed_color
+            )
+            if icon_url:
+                embed.set_thumbnail(url=icon_url)
+            
+            temp_display_value = "N/A"
+            if isinstance(temp_celsius, float):
+                temp_display_value = f"{temp_celsius:.1f}°C / {temp_fahrenheit:.1f}°F"
+                if isinstance(feels_like_celsius, float):
+                     temp_display_value += f"\n(Feels like: {feels_like_celsius:.1f}°C / {feels_like_fahrenheit:.1f}°F)"
+
+            embed.add_field(name="🌡️ Temperature", value=temp_display_value, inline=False)
+            embed.add_field(name="💧 Humidity", value=f"{humidity}%" if humidity is not None else "N/A", inline=True)
+            embed.add_field(name="🌬️ Wind", value=f"{wind_speed} m/s" if wind_speed is not None else "N/A", inline=True)
+            embed.add_field(name="📊 Pressure", value=f"{pressure} hPa" if pressure is not None else "N/A", inline=True)
+
+            embed.set_footer(text=f"Forecast for: {forecast_date_str}\nWeather data provided by OpenWeatherMap")
+                
+            await interaction.edit_original_response(content=None, embed=embed)
+        else:
+            error_message_content = f"Could not retrieve weather forecast for **{effective_display}**."
+            if forecast_response and "message" in forecast_response:
+                api_msg = forecast_response['message']
+                error_message_content += f" API Message: {str(api_msg)}" 
+            elif forecast_response and "cod" in forecast_response: 
+                 error_message_content += f" API Code: {forecast_response['cod']}"
+            else:
+                error_message_content += " No detailed API message or unexpected response structure. Please check bot logs."
             await interaction.edit_original_response(content=error_message_content, embed=None)
 
 async def setup(bot: commands.Bot):
